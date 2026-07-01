@@ -1,9 +1,4 @@
-<<<<<<< HEAD
 # Copyright 2026-present MongoDB, Inc.
-=======
-# Copyright 2022-present MongoDB, Inc.
->>>>>>> b7961a7d (PR changes)
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -18,11 +13,8 @@
 
 """Test that connection continues to use hello after ismaster returns hello_ok"""
 
-<<<<<<< HEAD
 from __future__ import annotations
 
-=======
->>>>>>> b7961a7d (PR changes)
 import unittest
 from types import SimpleNamespace
 
