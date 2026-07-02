@@ -1,8 +1,12 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Copyright 2026-present MongoDB, Inc.
 =======
 # Copyright 2022-present MongoDB, Inc.
 >>>>>>> d6aad634 (added synchronous files and improved comment)
+=======
+# Copyright 2026-present MongoDB, Inc.
+>>>>>>> 1c674b77 (updated synchro configuration and generated synchronous test file)
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +26,6 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-<<<<<<< HEAD
 
 from pymongo.synchronous.pool import Connection
 from test import UnitTest
@@ -31,14 +34,6 @@ _IS_SYNC = True
 
 
 class TestHelloLatched(UnitTest):
-=======
-from unittest.mock import SyncMock
-
-from pymongo.synchronous.pool import Connection
-
-
-class TestHelloLatched(unittest.TestCase):
->>>>>>> d6aad634 (added synchronous files and improved comment)
     def setUp(self):
         self._sent = []
 
@@ -51,23 +46,12 @@ class TestHelloLatched(unittest.TestCase):
 
         return conn
 
-<<<<<<< HEAD
-=======
-    def mock_conn_command(self, db, cmd, **kwargs):
-        """Returns mocked hello and ismaster results for conn.command"""
-        self._sent.append(cmd.copy())
-        if cmd.get("ismaster") == 1:
-            return {"ok": 1, "helloOk": True, "ismaster": True, "maxWireVersion": 25}
-        return {"ok": 1, "isWritablePrimary": True, "maxWireVersion": 25}
-
->>>>>>> d6aad634 (added synchronous files and improved comment)
     def test_hello_is_latched(self):
         """
         Regression Test for PYTHON-5904
         Tests for connection hello_ok persistence when connection
         Switches from ismaster to hello
         """
-<<<<<<< HEAD
 
         def mock_conn_command(db, cmd, **kwargs):
             """Returns mocked hello and ismaster results for conn.command"""
@@ -78,10 +62,6 @@ class TestHelloLatched(unittest.TestCase):
 
         conn = self.create_connection()
         conn.command = mock_conn_command
-=======
-        conn = self.create_connection()
-        conn.command = SyncMock(side_effect=self.mock_conn_command)
->>>>>>> d6aad634 (added synchronous files and improved comment)
 
         # First hello
         conn._hello(None, None)
