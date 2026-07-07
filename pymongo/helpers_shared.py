@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import sys
 import traceback
+import asyncio
+import threading
 from collections import abc
 from collections.abc import Container, Iterable, Mapping, Sequence
 from typing import (
@@ -351,3 +353,15 @@ def _handle_exception() -> None:
             pass
         finally:
             del einfo
+
+
+def async_whoami():
+    """Returns an id for the current asychronous task"""
+    return id(asyncio.current_task())
+
+def whoami():
+    """Returns an idea for the current thread"""
+    return threading.get_ident()
+
+
+
