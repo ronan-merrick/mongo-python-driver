@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-
 from pymongo.asynchronous.pool import AsyncConnection
 from test.asynchronous import AsyncUnitTest
 
