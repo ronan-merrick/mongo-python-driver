@@ -1,7 +1,6 @@
 from pymongo.helpers_shared import async_whoami
 from pymongo.lock import _async_create_condition, _async_cond_wait
 from contextlib import asynccontextmanager
-import asyncio
 
 
 class AsyncRWLock:
@@ -13,7 +12,6 @@ class AsyncRWLock:
         self._active_writer = None
         self._active_readers = set()
         self._waiting_writers = 0
-        self._timeout = None 
 
     async def _acquire_read(self):
         async with self._read_cond:
