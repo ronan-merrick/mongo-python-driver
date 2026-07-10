@@ -17,6 +17,10 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+<<<<<<< HEAD
+=======
+
+>>>>>>> e7b22d57 (inlined mock_conn_command in test_hello_latched and removed the mock object)
 from pymongo.asynchronous.pool import AsyncConnection
 from test.asynchronous import AsyncUnitTest
 
