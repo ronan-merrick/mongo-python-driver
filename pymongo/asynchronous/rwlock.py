@@ -13,7 +13,8 @@ class AsyncRWLock:
         self._active_readers = set()
         self._waiting_writers = 0
 
-    async def _acquire_read(self):
+    async def acquire_read(self):
+        """Acquires the read lock"""
         async with self._read_cond:
             if self._active_writer == async_whoami():
                 raise RuntimeError("Lock downgrades not supported")
@@ -25,7 +26,8 @@ class AsyncRWLock:
 
             self._active_readers.add(async_whoami())
 
-    async def _release_read(self):
+    async def release_read(self):
+        """Releases the read lock"""
         async with self._read_cond:
             if async_whoami() not in self._active_readers:
                 raise RuntimeError("Release called for read lock not being held")
@@ -36,7 +38,8 @@ class AsyncRWLock:
             if len(self._active_readers) == 0 and self._waiting_writers > 0:
                 self._write_cond.notify()
 
-    async def _acquire_write(self):
+    async def acquire_write(self):
+       """Acquires the write lock"""
        async with self._write_cond:
             if async_whoami() in self._active_readers:
                 raise RuntimeError("Lock upgrades not supported")
@@ -63,7 +66,8 @@ class AsyncRWLock:
                         self._read_cond.notify_all()
 
 
-    async def _release_write(self):
+    async def release_write(self):
+        """Releases the write lock"""
         async with self._write_cond:
             if self._active_writer != async_whoami():
                 raise RuntimeError("Release called for write lock not held")
@@ -80,16 +84,18 @@ class AsyncRWLock:
 
     @asynccontextmanager
     async def read_lock(self):
-        await self._acquire_read()
+        """Context manager for read lock"""
+        await self.acquire_read()
         try:
             yield
         finally:
-            await self._release_read()
+            await self.release_read()
 
     @asynccontextmanager
     async def write_lock(self):
-        await self._acquire_write()
+        """Context manager for write lock"""
+        await self.acquire_write()
         try:
             yield
         finally:
-            await self._release_write()
+            await self.release_write()
