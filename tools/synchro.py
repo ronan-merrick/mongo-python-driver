@@ -140,6 +140,8 @@ replacements = {
     "_async_create_connection": "_create_connection",
     "pymongo.asynchronous.srv_resolver._SrvResolver.get_hosts": "pymongo.synchronous.srv_resolver._SrvResolver.get_hosts",
     "dns.asyncresolver.resolve": "dns.resolver.resolve",
+    "AsyncRWLock": "RWLock",
+    "async_whoami": "whoami",
 }
 
 docstring_replacements: dict[tuple[str, str], str] = {
@@ -189,7 +191,11 @@ def async_only_test(f: Path) -> bool:
         "test_async_loop_safety.py",
         "test_async_contextvars_reset.py",
         "test_async_loop_unblocked.py",
+<<<<<<< HEAD
         "test_async_network_layer.py",
+=======
+        "test_rw_lock.py",
+>>>>>>> 3f530939 (generated sync lock, modified synchro and added outline for sync test)
     ]
 
 

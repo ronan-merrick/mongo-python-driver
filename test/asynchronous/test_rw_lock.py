@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import unittest
+
 from pymongo.asynchronous.rwlock import AsyncRWLock
 from pymongo.lock import _async_create_lock
 from test.asynchronous import AsyncUnitTest
 
 TIMEOUT = 1.0
-
 
 
 class TestRWLock(AsyncUnitTest):
@@ -24,7 +26,7 @@ class TestRWLock(AsyncUnitTest):
 
     async def _reader_task(self, acquire_ev, release_ev, start_ev=None):
         """Task for test readers"""
-        
+
         self._optional_start_event(start_ev)
 
         async with self.lock.read_lock():
@@ -33,7 +35,7 @@ class TestRWLock(AsyncUnitTest):
 
     async def _writer_task(self, acquire_ev, release_ev, start_ev=None):
         """Task for test writers"""
-            
+
         self._optional_start_event(start_ev)
 
         async with self.lock.write_lock():
@@ -54,7 +56,7 @@ class TestRWLock(AsyncUnitTest):
         await asyncio.wait_for(reader2_acquire_ev.wait(), timeout=TIMEOUT)
 
         # Verify there are two active readers
-        self.assertEqual(len(self.lock._active_readers),2)
+        self.assertEqual(len(self.lock._active_readers), 2)
         # Release the readers
         release_readers_ev.set()
 
@@ -68,12 +70,14 @@ class TestRWLock(AsyncUnitTest):
         release_writer = asyncio.Event()
         release_reader = asyncio.Event()
 
-        # Start a writer and make sure they get the lock 
+        # Start a writer and make sure they get the lock
         writer = asyncio.create_task(self._writer_task(writer_acquire_ev, release_writer))
         await asyncio.wait_for(writer_acquire_ev.wait(), timeout=TIMEOUT)
 
         # Start a reader and verify that they don't get the lock while the writer holds it
-        reader = asyncio.create_task(self._reader_task(reader_acquire_ev,release_reader,reader_started_ev))
+        reader = asyncio.create_task(
+            self._reader_task(reader_acquire_ev, release_reader, reader_started_ev)
+        )
         # Verify that the reader has started
         await asyncio.wait_for(reader_started_ev.wait(), timeout=TIMEOUT)
         # Give the reader another chance to run and then verify that it hasn't got the lock
@@ -90,26 +94,26 @@ class TestRWLock(AsyncUnitTest):
     async def test_writer_excludes_writers(self):
         """Tests that an active writer excludes other writers"""
         writer1_acquire_ev = asyncio.Event()
-        writer2_acquire_ev = asyncio.Event() 
+        writer2_acquire_ev = asyncio.Event()
         writer1_release_ev = asyncio.Event()
         writer2_release_ev = asyncio.Event()
         writer2_start_ev = asyncio.Event()
 
-        # Start the first writer and verify it has the lock 
-        writer1 = asyncio.create_task(self._writer_task(writer1_acquire_ev,
-                                                  writer1_release_ev))
+        # Start the first writer and verify it has the lock
+        writer1 = asyncio.create_task(self._writer_task(writer1_acquire_ev, writer1_release_ev))
         await asyncio.wait_for(writer1_acquire_ev.wait(), timeout=TIMEOUT)
 
         #  Start the second writer
-        writer2 = asyncio.create_task(self._writer_task(
-            writer2_acquire_ev, writer2_release_ev, writer2_start_ev))
+        writer2 = asyncio.create_task(
+            self._writer_task(writer2_acquire_ev, writer2_release_ev, writer2_start_ev)
+        )
         await asyncio.wait_for(writer2_start_ev.wait(), timeout=TIMEOUT)
         # Yield control and give the second writer another potential chance to run
         await asyncio.sleep(0)
         # Verify the second writer didn't get the lock
         self.assertFalse(writer2_acquire_ev.is_set())
 
-        # Release the first writer 
+        # Release the first writer
         writer1_release_ev.set()
         # Wait for the second writer to get the lock
         await asyncio.wait_for(writer2_acquire_ev.wait(), timeout=TIMEOUT)
@@ -127,7 +131,9 @@ class TestRWLock(AsyncUnitTest):
         writer_release_ev = asyncio.Event()
 
         reader = asyncio.create_task(self._reader_task(reader_acquire_ev, reader_release_ev))
-        writer = asyncio.create_task(self._writer_task(writer_acquire_ev, writer_release_ev, writer_start_ev))
+        writer = asyncio.create_task(
+            self._writer_task(writer_acquire_ev, writer_release_ev, writer_start_ev)
+        )
 
         # Verify the reader has the lock
         await asyncio.wait_for(reader_acquire_ev.wait(), timeout=TIMEOUT)
@@ -152,11 +158,11 @@ class TestRWLock(AsyncUnitTest):
         """Tests that writers are given preference when readers and writers are waiting"""
         writer1_acquire_ev = asyncio.Event()
         writer2_acquire_ev = asyncio.Event()
-        reader1_acquire_ev = asyncio.Event() 
-        reader2_acquire_ev = asyncio.Event() 
+        reader1_acquire_ev = asyncio.Event()
+        reader2_acquire_ev = asyncio.Event()
         writer2_start_ev = asyncio.Event()
-        reader1_start_ev = asyncio.Event() 
-        reader2_start_ev = asyncio.Event() 
+        reader1_start_ev = asyncio.Event()
+        reader2_start_ev = asyncio.Event()
         readers_release_ev = asyncio.Event()
         writer_1_release_ev = asyncio.Event()
         writer_2_release_ev = asyncio.Event()
@@ -167,20 +173,24 @@ class TestRWLock(AsyncUnitTest):
 
         # Start two more readers
         reader1 = asyncio.create_task(
-            self._reader_task(reader1_acquire_ev, readers_release_ev, reader1_start_ev))
+            self._reader_task(reader1_acquire_ev, readers_release_ev, reader1_start_ev)
+        )
         reader2 = asyncio.create_task(
-            self._reader_task(reader2_acquire_ev, readers_release_ev, reader2_start_ev))
-               
+            self._reader_task(reader2_acquire_ev, readers_release_ev, reader2_start_ev)
+        )
+
         # Verify that they start
         await asyncio.wait_for(reader1_start_ev.wait(), timeout=TIMEOUT)
         await asyncio.wait_for(reader2_start_ev.wait(), timeout=TIMEOUT)
-        
+
         # Verify that they don't get the lock
         self.assertFalse(reader1_acquire_ev.is_set())
         self.assertFalse(reader2_acquire_ev.is_set())
 
         # Start another writer
-        writer2 = asyncio.create_task(self._writer_task(writer2_acquire_ev, writer_2_release_ev, writer2_start_ev))
+        writer2 = asyncio.create_task(
+            self._writer_task(writer2_acquire_ev, writer_2_release_ev, writer2_start_ev)
+        )
         # Verify that it starts and doesn't get the lock
         await asyncio.wait_for(writer2_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(writer2_acquire_ev.is_set())
@@ -189,8 +199,8 @@ class TestRWLock(AsyncUnitTest):
         writer_1_release_ev.set()
 
         # Verify that the second writer gets the lock
-        await asyncio.wait_for(writer2_acquire_ev.wait(),timeout=TIMEOUT)
-        # Verify that the two readers do not get the lock
+        await asyncio.wait_for(writer2_acquire_ev.wait(), timeout=TIMEOUT)
+        # Verify that the two readers do not get the lock
         self.assertFalse(reader1_acquire_ev.is_set())
         self.assertFalse(reader2_acquire_ev.is_set())
 
@@ -215,7 +225,7 @@ class TestRWLock(AsyncUnitTest):
         async with self.lock.write_lock():
             with self.assertRaises(RuntimeError):
                 async with self.lock.write_lock():
-                    pass 
+                    pass
 
     async def test_read_write_upgrade(self):
         """Tests that an error is raised if an attempt is made to upgrade from read to write"""
@@ -238,7 +248,7 @@ class TestRWLock(AsyncUnitTest):
 
     async def test_wrong_owner_write_release(self):
         """Tests that an error is raised if somebody other than the current owner tries to release"""
- 
+
         writer_acquire_ev = asyncio.Event()
         writer_release_ev = asyncio.Event()
 
@@ -246,7 +256,7 @@ class TestRWLock(AsyncUnitTest):
         writer = asyncio.create_task(self._writer_task(writer_acquire_ev, writer_release_ev))
         await asyncio.wait_for(writer_acquire_ev.wait(), timeout=TIMEOUT)
 
-        # Now try to release the lock
+        # Now try to release the lock
         with self.assertRaises(RuntimeError):
             await self.lock.release_write()
 
@@ -274,7 +284,7 @@ class TestRWLock(AsyncUnitTest):
 
         reader_release_ev.set()
         await asyncio.gather(reader)
-        
+
     async def test_read_context_manager_release(self):
         """Tests that the lock is released  when using the read context manager"""
         # acquire the read lock with context manager
@@ -294,12 +304,16 @@ class TestRWLock(AsyncUnitTest):
 
             exit_context_ev.set()
 
-        # Start a reader and let them get the lock 
-        reader = asyncio.create_task(reader_task(reader_acquire_ev, reader_release_ev, reader_exit_context_ev))
-        await asyncio.wait_for(reader_acquire_ev.wait(),timeout=TIMEOUT)
+        # Start a reader and let them get the lock
+        reader = asyncio.create_task(
+            reader_task(reader_acquire_ev, reader_release_ev, reader_exit_context_ev)
+        )
+        await asyncio.wait_for(reader_acquire_ev.wait(), timeout=TIMEOUT)
 
         # Start a writer and verify they started but don't have the lock
-        writer = asyncio.create_task(self._writer_task(writer_acquire_ev, writer_release_ev, writer_start_ev))
+        writer = asyncio.create_task(
+            self._writer_task(writer_acquire_ev, writer_release_ev, writer_start_ev)
+        )
         await asyncio.wait_for(writer_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(writer_acquire_ev.is_set())
         self.assertFalse(reader_exit_context_ev.is_set())
@@ -334,18 +348,20 @@ class TestRWLock(AsyncUnitTest):
             exit_context_ev.set()
 
         # Start a writer and wait for it to get the lock
-        writer = asyncio.create_task(writer_task(
-            writer_acquire_ev, writer_release_ev, writer_exit_context_ev))
+        writer = asyncio.create_task(
+            writer_task(writer_acquire_ev, writer_release_ev, writer_exit_context_ev)
+        )
         await asyncio.wait_for(writer_acquire_ev.wait(), timeout=TIMEOUT)
 
         # While the writer has the lock start a reader
-        reader = asyncio.create_task(self._reader_task(reader_acquire_ev,
-                                                       reader_release_ev, reader_start_ev))
-        
+        reader = asyncio.create_task(
+            self._reader_task(reader_acquire_ev, reader_release_ev, reader_start_ev)
+        )
+
         # Wait for the reader to start
         await asyncio.wait_for(reader_start_ev.wait(), timeout=TIMEOUT)
 
-        # Verify it didn't get the lock 
+        # Verify it didn't get the lock
         self.assertFalse(reader_acquire_ev.is_set())
         # Verify the writer hasn't left the context manager
         self.assertFalse(writer_exit_context_ev.is_set())
@@ -364,27 +380,28 @@ class TestRWLock(AsyncUnitTest):
 
     async def test_read_context_manager_release_on_exception(self):
         """Tests that the lock is released  when using the read context manager"""
-        
+
         reader_acquire_ev = asyncio.Event()
         reader_release_ev = asyncio.Event()
         writer_acquire_ev = asyncio.Event()
         writer_release_ev = asyncio.Event()
         writer_start_ev = asyncio.Event()
-        
+
         async def reader_task(acquire_ev, release_ev):
             async with self.lock.read_lock():
                 acquire_ev.set()
                 await release_ev.wait()
                 raise self._TestError()
-            
+
         # start a reader and verify it gets the lock
         reader = asyncio.create_task(reader_task(reader_acquire_ev, reader_release_ev))
-        await asyncio.wait_for(reader_acquire_ev.wait(),timeout=TIMEOUT)
+        await asyncio.wait_for(reader_acquire_ev.wait(), timeout=TIMEOUT)
 
-        # start a writer and verify it starts but doesn't get the lock
-        writer = asyncio.create_task(self._writer_task(
-            writer_acquire_ev, writer_release_ev, writer_start_ev))
-        
+        # start a writer and verify it starts but doesn't get the lock
+        writer = asyncio.create_task(
+            self._writer_task(writer_acquire_ev, writer_release_ev, writer_start_ev)
+        )
+
         await asyncio.wait_for(writer_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(writer_acquire_ev.is_set())
 
@@ -414,20 +431,20 @@ class TestRWLock(AsyncUnitTest):
                 raise self._TestError()
 
         # Start a writer and wait for them to acquire the lock
-        writer = asyncio.create_task(writer_task(
-            writer_acquire_ev, writer_release_ev))
-        
+        writer = asyncio.create_task(writer_task(writer_acquire_ev, writer_release_ev))
+
         await asyncio.wait_for(writer_acquire_ev.wait(), timeout=TIMEOUT)
-        
+
         # Now start a reader
-        reader = asyncio.create_task(self._reader_task(
-            reader_acquire_ev, reader_release_ev, reader_start_ev))
+        reader = asyncio.create_task(
+            self._reader_task(reader_acquire_ev, reader_release_ev, reader_start_ev)
+        )
 
         # Confirm the reader started but did not get the lock
         await asyncio.wait_for(reader_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(reader_acquire_ev.is_set())
 
-        # Signal the writer 
+        # Signal the writer
         with self.assertRaises(self._TestError):
             writer_release_ev.set()
             await writer
@@ -457,8 +474,9 @@ class TestRWLock(AsyncUnitTest):
         self.assertEqual(self.lock._waiting_writers, 0)
 
         # Start another writer and verify that they are waiting
-        waiter = asyncio.create_task(self._writer_task(
-            waiter_acquire_ev, waiter_release_ev, waiter_start_ev))
+        waiter = asyncio.create_task(
+            self._writer_task(waiter_acquire_ev, waiter_release_ev, waiter_start_ev)
+        )
         await asyncio.wait_for(waiter_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(waiter_acquire_ev.is_set())
 
@@ -469,9 +487,9 @@ class TestRWLock(AsyncUnitTest):
         # Now cancel the waiter
         waiter.cancel()
         with self.assertRaises(asyncio.CancelledError):
-            await waiter 
+            await waiter
 
-        # Give the waiter one more chance to run to 
+        # Give the waiter one more chance to run to
 
         # Verify that there are no dangling waiters
         self.assertEqual(self.lock._waiting_writers, 0)
@@ -485,14 +503,15 @@ class TestRWLock(AsyncUnitTest):
         writer_acquire_ev = asyncio.Event()
         writer_release_ev = asyncio.Event()
         reader_start_ev = asyncio.Event()
-        reader_acquire_ev = asyncio.Event() 
+        reader_acquire_ev = asyncio.Event()
         reader_release_ev = asyncio.Event()
 
         writer = asyncio.create_task(self._writer_task(writer_acquire_ev, writer_release_ev))
         await asyncio.wait_for(writer_acquire_ev.wait(), timeout=TIMEOUT)
 
-        reader = asyncio.create_task(self._reader_task(
-            reader_acquire_ev, reader_release_ev, reader_start_ev))
+        reader = asyncio.create_task(
+            self._reader_task(reader_acquire_ev, reader_release_ev, reader_start_ev)
+        )
         await asyncio.wait_for(reader_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(reader_acquire_ev.is_set())
 
@@ -501,7 +520,7 @@ class TestRWLock(AsyncUnitTest):
             await writer
 
         await asyncio.wait_for(reader_acquire_ev.wait(), timeout=TIMEOUT)
-       
+
         reader_release_ev.set()
         await reader
 
@@ -510,15 +529,15 @@ class TestRWLock(AsyncUnitTest):
         writer_acquire_ev = asyncio.Event()
         writer_release_ev = asyncio.Event()
         writer_start_ev = asyncio.Event()
-        reader_acquire_ev = asyncio.Event() 
+        reader_acquire_ev = asyncio.Event()
         reader_release_ev = asyncio.Event()
 
-        reader = asyncio.create_task(self._reader_task(
-            reader_acquire_ev, reader_release_ev))
+        reader = asyncio.create_task(self._reader_task(reader_acquire_ev, reader_release_ev))
         await asyncio.wait_for(reader_acquire_ev.wait(), timeout=TIMEOUT)
 
-        writer = asyncio.create_task(self._writer_task(
-            writer_acquire_ev, writer_release_ev, writer_start_ev))
+        writer = asyncio.create_task(
+            self._writer_task(writer_acquire_ev, writer_release_ev, writer_start_ev)
+        )
         await asyncio.wait_for(writer_start_ev.wait(), timeout=TIMEOUT)
         self.assertFalse(writer_acquire_ev.is_set())
 
@@ -527,6 +546,6 @@ class TestRWLock(AsyncUnitTest):
             await reader
 
         await asyncio.wait_for(writer_acquire_ev.wait(), timeout=TIMEOUT)
-       
+
         writer_release_ev.set()
         await writer
