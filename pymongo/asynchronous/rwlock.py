@@ -3,7 +3,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from pymongo.helpers_shared import async_whoami
-from pymongo.lock import _async_cond_wait, _async_create_condition
+from pymongo.lock import (_async_cond_wait, _async_create_condition,
+                          _async_create_lock)
 
 _IS_SYNC = False
 
@@ -11,8 +12,8 @@ _IS_SYNC = False
 class AsyncRWLock:
     """Non re-entrant, no upgrade/downgrade RAII-based rw Lock"""
 
-    def __init__(self, lock):
-        self._mutex = lock
+    def __init__(self):
+        self._mutex = _async_create_lock()
         self._read_cond = _async_create_condition(self._mutex)
         self._write_cond = _async_create_condition(self._mutex)
         self._active_writer = None

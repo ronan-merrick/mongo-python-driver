@@ -4,7 +4,6 @@ import asyncio
 import unittest
 
 from pymongo.asynchronous.rwlock import AsyncRWLock
-from pymongo.lock import _async_create_lock
 from test.asynchronous import AsyncUnitTest
 
 TIMEOUT = 1.0
@@ -17,7 +16,7 @@ class TestRWLock(AsyncUnitTest):
         pass
 
     def setUp(self):
-        self.lock = AsyncRWLock(_async_create_lock())
+        self.lock = AsyncRWLock()
 
     def _optional_start_event(self, start_ev):
         """Set a start event if provided"""
@@ -486,10 +485,10 @@ class TestRWLock(AsyncUnitTest):
 
         # Now cancel the waiter
         waiter.cancel()
+        await asyncio.sleep(0)
+
         with self.assertRaises(asyncio.CancelledError):
             await waiter
-
-        # Give the waiter one more chance to run to
 
         # Verify that there are no dangling waiters
         self.assertEqual(self.lock._waiting_writers, 0)
@@ -549,3 +548,111 @@ class TestRWLock(AsyncUnitTest):
 
         writer_release_ev.set()
         await writer
+
+    async def test_cancelled_write_holder_waiting_writers(self):
+        """Tests a cancelled write holder with waiting writers behind it"""
+
+        reader1_acquire_ev = asyncio.Event()
+        reader1_release_ev = asyncio.Event()
+        reader2_acquire_ev = asyncio.Event()
+        reader2_release_ev = asyncio.Event()
+        reader2_start_ev = asyncio.Event()
+        waiter1_acquire_ev = asyncio.Event()
+        waiter1_release_ev = asyncio.Event()
+        waiter1_start_ev = asyncio.Event()
+        waiter2_acquire_ev = asyncio.Event()
+        waiter2_release_ev = asyncio.Event()
+        waiter2_start_ev = asyncio.Event()
+        
+        # Start a reader and let it get the lock
+        reader1 = asyncio.create_task(self._reader_task(reader1_acquire_ev, reader1_release_ev))
+        await asyncio.wait_for(reader1_acquire_ev.wait(), timeout=TIMEOUT)
+
+        # Start a writer and let it queue behind the reader
+        waiter1 = asyncio.create_task(self._writer_task(
+            waiter1_acquire_ev, waiter1_release_ev, waiter1_start_ev))
+        await asyncio.wait_for(waiter1_start_ev.wait(), timeout=TIMEOUT)
+        self.assertFalse(waiter1_acquire_ev.is_set())
+         
+        # Start another writer and let it wait behind the writer 
+        waiter2 = asyncio.create_task(self._writer_task(
+            waiter2_acquire_ev, waiter2_release_ev, waiter2_start_ev))
+        await asyncio.wait_for(waiter2_start_ev.wait(), timeout=TIMEOUT)
+        self.assertFalse(waiter2_acquire_ev.is_set())
+
+        # Start another reader
+        reader2 = asyncio.create_task(self._reader_task(
+            reader2_acquire_ev, reader2_release_ev, reader2_start_ev))
+        await asyncio.wait_for(reader2_start_ev.wait(), timeout=TIMEOUT)
+        self.assertFalse(reader2_acquire_ev.is_set())
+
+        # Cancel the first writer
+        waiter1.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter1
+
+        self.assertEqual(self.lock._waiting_writers, 1)
+
+        # Now signal the reader
+        reader1_release_ev.set()
+
+        # Verify the other writer gets the lock
+        await asyncio.wait_for(waiter2_acquire_ev.wait(), timeout=TIMEOUT)
+        self.assertFalse(reader2_acquire_ev.is_set())
+
+        # Signal the other writer
+        waiter2_release_ev.set()
+
+        # Verify the other reader gets the lock
+        await asyncio.wait_for(reader2_acquire_ev.wait(), timeout=TIMEOUT)
+
+        # End
+        reader2_release_ev.set()
+        await asyncio.gather(waiter2, reader1, reader2)
+
+
+    async def test_cancelled_waiter_waiting_readers(self):
+        """Tests that a cancelled writer waiter with no active writer doesn't
+        block readers"""
+
+        reader1_acquire_ev = asyncio.Event()
+        reader1_release_ev = asyncio.Event()
+        reader2_acquire_ev = asyncio.Event()
+        reader2_release_ev = asyncio.Event()
+        reader2_start_ev = asyncio.Event()
+        waiter_acquire_ev = asyncio.Event()
+        waiter_release_ev = asyncio.Event()
+        waiter_start_ev = asyncio.Event()
+        
+        # Start a reader and let it get the lock
+        reader1 = asyncio.create_task(self._reader_task(reader1_acquire_ev, reader1_release_ev))
+        await asyncio.wait_for(reader1_acquire_ev.wait(), timeout=TIMEOUT)
+
+        # Start a writer and let it queue behind the reader
+        waiter = asyncio.create_task(self._writer_task(
+            waiter_acquire_ev, waiter_release_ev, waiter_start_ev))
+        await asyncio.wait_for(waiter_start_ev.wait(), timeout=TIMEOUT)
+        self.assertFalse(waiter_acquire_ev.is_set())
+         
+        # Start another reader
+        reader2 = asyncio.create_task(self._reader_task(
+            reader2_acquire_ev, reader2_release_ev, reader2_start_ev))
+        await asyncio.wait_for(reader2_start_ev.wait(), timeout=TIMEOUT)
+        self.assertFalse(reader2_acquire_ev.is_set())
+
+        # Cancel the first writer
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+
+        self.assertEqual(self.lock._waiting_writers, 0)
+
+        # Now signal the reader
+        reader1_release_ev.set()
+
+        # Verify the other reader gets the lock
+        await asyncio.wait_for(reader2_acquire_ev.wait(), timeout=TIMEOUT)
+
+        # End
+        reader2_release_ev.set()
+        await asyncio.gather(reader1, reader2)
