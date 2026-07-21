@@ -191,11 +191,8 @@ def async_only_test(f: Path) -> bool:
         "test_async_loop_safety.py",
         "test_async_contextvars_reset.py",
         "test_async_loop_unblocked.py",
-<<<<<<< HEAD
         "test_async_network_layer.py",
-=======
-        "test_rw_lock.py",
->>>>>>> 3f530939 (generated sync lock, modified synchro and added outline for sync test)
+        "test_rw_lock.py"
     ]
 
 

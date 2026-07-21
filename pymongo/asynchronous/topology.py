@@ -343,6 +343,8 @@ class Topology:
             # held the lock until registering the event.
             try:
                 await asyncio.wait_for(topology_changed_ev.wait(), common.MIN_HEARTBEAT_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
             finally:
                 # if task was cancelled remove the event
                 async with self._lock.write_lock():
@@ -627,6 +629,8 @@ class Topology:
 
         try:
             await asyncio.wait_for(topology_changed_ev.wait(), timeout=wait_time)
+        except asyncio.TimeoutError:
+            pass
         finally:
             async with self._lock.write_lock():
                 if topology_changed_ev in self._registered_waiters:
