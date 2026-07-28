@@ -3,8 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from pymongo.helpers_shared import async_whoami
-from pymongo.lock import (_async_cond_wait, _async_create_condition,
-                          _async_create_lock)
+from pymongo.lock import _async_cond_wait, _async_create_condition, _async_create_lock
 
 _IS_SYNC = False
 
@@ -20,7 +19,7 @@ class AsyncRWLock:
         self._active_readers = set()
         self._waiting_writers = 0
 
-    async def acquire_read(self):
+    async def acquire_read(self) -> None:
         """Acquires the read lock"""
         async with self._read_cond:
             if self._active_writer == async_whoami():
@@ -33,7 +32,7 @@ class AsyncRWLock:
 
             self._active_readers.add(async_whoami())
 
-    async def release_read(self):
+    async def release_read(self) -> None:
         """Releases the read lock"""
         async with self._read_cond:
             if async_whoami() not in self._active_readers:
@@ -45,7 +44,7 @@ class AsyncRWLock:
             if len(self._active_readers) == 0 and self._waiting_writers > 0:
                 self._write_cond.notify()
 
-    async def acquire_write(self):
+    async def acquire_write(self) -> None:
         """Acquires the write lock"""
         async with self._write_cond:
             if async_whoami() in self._active_readers:
@@ -72,7 +71,7 @@ class AsyncRWLock:
                     else:
                         self._read_cond.notify_all()
 
-    async def release_write(self):
+    async def release_write(self) -> None:
         """Releases the write lock"""
         async with self._write_cond:
             if self._active_writer != async_whoami():
@@ -89,7 +88,7 @@ class AsyncRWLock:
             self._read_cond.notify_all()
 
     @asynccontextmanager
-    async def read_lock(self):
+    async def read_lock(self) -> None:
         """Context manager for read lock"""
         await self.acquire_read()
         try:
@@ -98,7 +97,7 @@ class AsyncRWLock:
             await self.release_read()
 
     @asynccontextmanager
-    async def write_lock(self):
+    async def write_lock(self) -> None:
         """Context manager for write lock"""
         await self.acquire_write()
         try:

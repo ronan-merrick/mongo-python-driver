@@ -90,3 +90,22 @@ async def _async_cond_wait(condition: Condition, timeout: Optional[float]) -> bo
 
 def _cond_wait(condition: threading.Condition, timeout: Optional[float]) -> bool:
     return condition.wait(timeout)
+
+
+async def _async_event_wait(event: asyncio.Event, timeout: Optional[float]) -> bool:
+    try:
+        return await wait_for(event.wait(), timeout)
+    except asyncio.TimeoutError:
+        return False
+
+
+def _event_wait(event: threading.Event, timeout: Optional[float]) -> bool:
+    return event.wait(timeout)
+
+
+def create_async_event():
+    return asyncio.Event()
+
+
+def create_event():
+    return threading.Event()

@@ -355,11 +355,11 @@ def _handle_exception() -> None:
             del einfo
 
 
-def async_whoami():
+def async_whoami() -> int:
     """Returns an id for the current asynchronous task"""
     return id(asyncio.current_task())
 
 
-def whoami():
+def whoami() -> int:
     """Returns an idea for the current thread"""
     return threading.get_ident()

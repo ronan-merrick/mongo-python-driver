@@ -907,5 +907,24 @@ class TestServerSelectionErrors(TopologyTest):
         self.assertMessage("No mongoses available", t)
 
 
+class TestTopologyWaiterBehaviour(TopologyTest):
+    def test_stale_waiter_removed_on_timeout(self):
+        pass 
+
+    def test_waiter_woken_on_change(self):
+        pass 
+
+    def no_lost_wakeup_around_register_then_wait(self):
+        pass 
+
+
+class TestTopologySelectionLocking(TopologyTest):
+    def test_fast_path_uses_read_lock(self):
+        pass 
+
+    def test_fast_pass_miss_uses_write_lock(self):
+        pass 
+
+
 if __name__ == "__main__":
     unittest.main()

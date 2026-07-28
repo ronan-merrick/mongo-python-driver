@@ -51,11 +51,7 @@ from pymongo.errors import (
     WriteError,
 )
 from pymongo.hello import Hello
-from pymongo.lock import (
-    _async_cond_wait,
-    _async_create_condition,
-    _async_create_lock,
-)
+from pymongo.lock import _async_event_wait, create_async_event
 from pymongo.pool_options import PoolOptions
 from pymongo.server_description import ServerDescription
 from pymongo.server_selectors import (
@@ -176,7 +172,7 @@ class Topology:
         # Stores all monitor tasks that need to be joined on close or server selection
         self._monitor_tasks: list[MonitorBase] = []
         # waiters who have requested a check
-        self._registered_waiters: list[asyncio.Event] = []
+        self._registered_checks: list[asyncio.Event] = []
 
     async def open(self) -> None:
         """Start monitoring, or restart after a fork.
@@ -256,33 +252,14 @@ class Topology:
         if not _IS_SYNC and self._monitor_tasks:
             await self.cleanup_monitors()
 
-        # Try to select on the fast path with the shared read lock
-        async with self._lock.read_lock():
-            server_descriptions = self._description.apply_selector(
-                selector,
-                address,
-                custom_selector=self._settings.server_selector,
-                deprioritized_servers=[server.description for server in deprioritized_servers]
-                if deprioritized_servers
-                else None,
-            )
-
-            if server_descriptions:
-                return [
-                cast(Server, self.get_server_by_address(sd.address)) for sd in server_descriptions
-            ]
-
-        # Fall back to requesting checks under stricter locking
-        servers = await self._select_servers_loop(
-                selector,
-                server_timeout,
-                operation,
-                operation_id,
-                address,
-                deprioritized_servers=deprioritized_servers,
-            )
-        
-        return servers
+        return await self._select_servers_loop(
+            selector,
+            server_timeout,
+            operation,
+            operation_id,
+            address,
+            deprioritized_servers=deprioritized_servers,
+        )
 
     async def _select_servers_loop(
         self,
@@ -302,11 +279,33 @@ class Topology:
         )
         ss.started()
 
-        server_descriptions = None
+        servers = None
 
-        while not server_descriptions:
+        # Try to select on the fast path with the shared read lock
+        async with self._lock.read_lock():
+            server_descriptions = self._description.apply_selector(
+                selector,
+                address,
+                custom_selector=self._settings.server_selector,
+                deprioritized_servers=[server.description for server in deprioritized_servers]
+                if deprioritized_servers
+                else None,
+            )
+
+            if server_descriptions:
+                self._description.check_compatible()
+
+                servers = [
+                    cast(Server, self.get_server_by_address(sd.address))
+                    for sd in server_descriptions
+                ]
+
+        while not servers:
+            # Fall back to stronger lock semantics and request checks
+            # if the fast path didn't succeed
             async with self._lock.write_lock():
-
+                # Try selection again to make sure we didn't miss anything
+                # when switching from the read lock under the fast path
                 server_descriptions = self._description.apply_selector(
                     selector,
                     address,
@@ -314,14 +313,20 @@ class Topology:
                     deprioritized_servers=[server.description for server in deprioritized_servers]
                     if deprioritized_servers
                     else None,
-                    )
-                
-                if server_descriptions:
-                    return [
-                        cast(Server, self.get_server_by_address(sd.address)) for sd in server_descriptions
-                    ]
+                )
 
-                    # No suitable servers.
+                if server_descriptions:
+                    self._description.check_compatible()
+                    servers = [
+                        cast(Server, self.get_server_by_address(sd.address))
+                        for sd in server_descriptions
+                    ]
+                    break
+
+                # if we're requesting checks unset deprioritized_servers
+                deprioritized_servers = None
+
+                # No suitable servers.
                 if timeout == 0 or now > end_time:
                     ss.failed(self._error_message(selector), self.description)
                     raise ServerSelectionTimeoutError(
@@ -334,35 +339,38 @@ class Topology:
 
                 await self._ensure_opened()
                 self._request_check_all()
-                topology_changed_ev = asyncio.Event()
-                self._registered_waiters.append(topology_changed_ev)
+                # Register a waiter while under the write lock.
+                # We'll wait on this after releasing so we don't miss anything
+                topology_changed_ev = create_async_event()
+                self._registered_checks.append(topology_changed_ev)
 
-            # Release the lock and wait for the topology description to
+            # Release the write lock and wait for the topology description to
             # change, or for a timeout. We won't miss any changes that
             # came after our most recent apply_selector call, since we've
-            # held the lock until registering the event.
+            # held the lock until registering the waiter.
             try:
-                await asyncio.wait_for(topology_changed_ev.wait(), common.MIN_HEARTBEAT_INTERVAL)
-            except asyncio.TimeoutError:
-                pass
+                await _async_event_wait(topology_changed_ev, common.MIN_HEARTBEAT_INTERVAL)
             finally:
-                # if task was cancelled remove the event
+                # if waiter was cancelled or timed out remove them
                 async with self._lock.write_lock():
-                    if topology_changed_ev in self._registered_waiters:
-                        self._registered_waiters.remove(topology_changed_ev)
+                    if topology_changed_ev in self._registered_checks:
+                        self._registered_checks.remove(topology_changed_ev)
 
+            # Try the fast path again after waking
             async with self._lock.read_lock():
-                self._description.check_compatible()
                 now = time.monotonic()
                 server_descriptions = self._description.apply_selector(
                     selector, address, custom_selector=self._settings.server_selector
                 )
-            
-                self._description.check_compatible()
+
                 if server_descriptions:
-                    return [
-                    cast(Server, self.get_server_by_address(sd.address)) for sd in server_descriptions
+                    self._description.check_compatible()
+                    servers = [
+                        cast(Server, self.get_server_by_address(sd.address))
+                        for sd in server_descriptions
                     ]
+
+        return servers
 
     async def _select_server(
         self,
@@ -502,8 +510,8 @@ class Topology:
                 self._monitor_tasks.append(self._srv_monitor)
 
         # Wake anything waiting in select_servers().
-        while len(self._registered_waiters) > 0:
-            waiter = self._registered_waiters.pop()
+        while len(self._registered_checks) > 0:
+            waiter = self._registered_checks.pop()
             waiter.set()
 
     async def on_change(
@@ -624,17 +632,16 @@ class Topology:
         async with self._lock.write_lock():
             self._request_check_all()
             # Register an Event under lock, then release and wait
-            topology_changed_ev = asyncio.Event()
-            self._registered_waiters.append(topology_changed_ev)
+            topology_changed_ev = create_async_event()
+            self._registered_checks.append(topology_changed_ev)
 
         try:
-            await asyncio.wait_for(topology_changed_ev.wait(), timeout=wait_time)
-        except asyncio.TimeoutError:
-            pass
+            await _async_event_wait(topology_changed_ev, common.MIN_HEARTBEAT_INTERVAL)
         finally:
+            # remove any cancelled or timed out waiters
             async with self._lock.write_lock():
-                if topology_changed_ev in self._registered_waiters:
-                    self._registered_waiters.remove(topology_changed_ev)
+                if topology_changed_ev in self._registered_checks:
+                    self._registered_checks.remove(topology_changed_ev)
 
     def data_bearing_servers(self) -> list[ServerDescription]:
         """Return a list of all data-bearing servers.

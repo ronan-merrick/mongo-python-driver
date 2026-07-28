@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from pymongo.helpers_shared import whoami
-from pymongo.lock import _cond_wait, _create_condition
+from pymongo.lock import _cond_wait, _create_condition, _create_lock
 
 _IS_SYNC = True
 
@@ -11,15 +11,15 @@ _IS_SYNC = True
 class RWLock:
     """Non re-entrant, no upgrade/downgrade RAII-based rw Lock"""
 
-    def __init__(self, lock):
-        self._mutex = lock
+    def __init__(self):
+        self._mutex = _create_lock()
         self._read_cond = _create_condition(self._mutex)
         self._write_cond = _create_condition(self._mutex)
         self._active_writer = None
         self._active_readers = set()
         self._waiting_writers = 0
 
-    def acquire_read(self):
+    def acquire_read(self) -> None:
         """Acquires the read lock"""
         with self._read_cond:
             if self._active_writer == whoami():
@@ -32,7 +32,7 @@ class RWLock:
 
             self._active_readers.add(whoami())
 
-    def release_read(self):
+    def release_read(self) -> None:
         """Releases the read lock"""
         with self._read_cond:
             if whoami() not in self._active_readers:
@@ -44,7 +44,7 @@ class RWLock:
             if len(self._active_readers) == 0 and self._waiting_writers > 0:
                 self._write_cond.notify()
 
-    def acquire_write(self):
+    def acquire_write(self) -> None:
         """Acquires the write lock"""
         with self._write_cond:
             if whoami() in self._active_readers:
@@ -71,7 +71,7 @@ class RWLock:
                     else:
                         self._read_cond.notify_all()
 
-    def release_write(self):
+    def release_write(self) -> None:
         """Releases the write lock"""
         with self._write_cond:
             if self._active_writer != whoami():
@@ -88,7 +88,7 @@ class RWLock:
             self._read_cond.notify_all()
 
     @contextmanager
-    def read_lock(self):
+    def read_lock(self) -> None:
         """Context manager for read lock"""
         self.acquire_read()
         try:
@@ -97,7 +97,7 @@ class RWLock:
             self.release_read()
 
     @contextmanager
-    def write_lock(self):
+    def write_lock(self) -> None:
         """Context manager for write lock"""
         self.acquire_write()
         try:

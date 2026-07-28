@@ -46,11 +46,7 @@ from pymongo.errors import (
     WriteError,
 )
 from pymongo.hello import Hello
-from pymongo.lock import (
-    _cond_wait,
-    _create_condition,
-    _create_lock,
-)
+from pymongo.lock import _event_wait, create_event
 from pymongo.pool_options import PoolOptions
 from pymongo.server_description import ServerDescription
 from pymongo.server_selectors import (
@@ -63,6 +59,7 @@ from pymongo.server_selectors import (
 from pymongo.synchronous.client_session import _ServerSession, _ServerSessionPool
 from pymongo.synchronous.monitor import MonitorBase, SrvMonitor
 from pymongo.synchronous.pool import Pool
+from pymongo.synchronous.rwlock import RWLock
 from pymongo.synchronous.server import Server
 from pymongo.topology_description import (
     SRV_POLLING_TOPOLOGIES,
@@ -141,10 +138,7 @@ class Topology:
         self._seed_addresses = list(topology_description.server_descriptions())
         self._opened = False
         self._closed = False
-        self._lock = _create_lock()
-        self._condition = _create_condition(
-            self._lock, self._settings.condition_class if _IS_SYNC else None
-        )
+        self._lock = RWLock()
         self._servers: dict[_Address, Server] = {}
         self._pid: Optional[int] = None
         self._max_cluster_time: Optional[ClusterTime] = None
@@ -177,6 +171,8 @@ class Topology:
 
         # Stores all monitor tasks that need to be joined on close or server selection
         self._monitor_tasks: list[MonitorBase] = []
+        # witers who have requested a check
+        self._registered_checks: list[asyncio.Event] = []
 
     def open(self) -> None:
         """Start monitoring, or restart after a fork.
@@ -205,7 +201,7 @@ class Topology:
                 "https://dochub.mongodb.org/core/pymongo-fork-deadlock",
                 **kwargs,
             )
-            with self._lock:
+            with self._lock.write_lock():
                 # Close servers and clear the pools.
                 for server in self._servers.values():
                     server.close()
@@ -213,7 +209,7 @@ class Topology:
                 # the child process.
                 self._session_pool.reset()
 
-        with self._lock:
+        with self._lock.write_lock():
             self._ensure_opened()
 
     def get_server_selection_timeout(self) -> float:
@@ -256,19 +252,14 @@ class Topology:
         if not _IS_SYNC and self._monitor_tasks:
             self.cleanup_monitors()
 
-        with self._lock:
-            server_descriptions = self._select_servers_loop(
-                selector,
-                server_timeout,
-                operation,
-                operation_id,
-                address,
-                deprioritized_servers=deprioritized_servers,
-            )
-
-            return [
-                cast(Server, self.get_server_by_address(sd.address)) for sd in server_descriptions
-            ]
+        return self._select_servers_loop(
+            selector,
+            server_timeout,
+            operation,
+            operation_id,
+            address,
+            deprioritized_servers=deprioritized_servers,
+        )
 
     def _select_servers_loop(
         self,
@@ -278,8 +269,8 @@ class Topology:
         operation_id: Optional[int],
         address: Optional[_Address],
         deprioritized_servers: Optional[list[Server]] = None,
-    ) -> list[ServerDescription]:
-        """select_servers() guts. Hold the lock when calling this."""
+    ) -> list[Server]:
+        """select_servers() guts"""
         now = time.monotonic()
         end_time = now + timeout
         logged_waiting = False
@@ -288,43 +279,98 @@ class Topology:
         )
         ss.started()
 
-        server_descriptions = self._description.apply_selector(
-            selector,
-            address,
-            custom_selector=self._settings.server_selector,
-            deprioritized_servers=[server.description for server in deprioritized_servers]
-            if deprioritized_servers
-            else None,
-        )
+        servers = None
 
-        while not server_descriptions:
-            # No suitable servers.
-            if timeout == 0 or now > end_time:
-                ss.failed(self._error_message(selector), self.description)
-                raise ServerSelectionTimeoutError(
-                    f"{self._error_message(selector)}, Timeout: {timeout}s, Topology Description: {self.description!r}"
-                )
-
-            if not logged_waiting:
-                ss.waiting(int(1000 * (end_time - time.monotonic())))
-                logged_waiting = True
-
-            self._ensure_opened()
-            self._request_check_all()
-
-            # Release the lock and wait for the topology description to
-            # change, or for a timeout. We won't miss any changes that
-            # came after our most recent apply_selector call, since we've
-            # held the lock until now.
-            _cond_wait(self._condition, common.MIN_HEARTBEAT_INTERVAL)
-            self._description.check_compatible()
-            now = time.monotonic()
+        # Try to select on the fast path with the shared read lock
+        with self._lock.read_lock():
             server_descriptions = self._description.apply_selector(
-                selector, address, custom_selector=self._settings.server_selector
+                selector,
+                address,
+                custom_selector=self._settings.server_selector,
+                deprioritized_servers=[server.description for server in deprioritized_servers]
+                if deprioritized_servers
+                else None,
             )
 
-        self._description.check_compatible()
-        return server_descriptions
+            if server_descriptions:
+                self._description.check_compatible()
+
+                servers = [
+                    cast(Server, self.get_server_by_address(sd.address))
+                    for sd in server_descriptions
+                ]
+
+        while not servers:
+            # Fall back to stronger lock semantics and request checks
+            # if the fast path didn't succeed
+            with self._lock.write_lock():
+                # Try selection again to make sure we didn't miss anything
+                # when switching from the read lock under the fast path
+                server_descriptions = self._description.apply_selector(
+                    selector,
+                    address,
+                    custom_selector=self._settings.server_selector,
+                    deprioritized_servers=[server.description for server in deprioritized_servers]
+                    if deprioritized_servers
+                    else None,
+                )
+
+                if server_descriptions:
+                    self._description.check_compatible()
+                    servers = [
+                        cast(Server, self.get_server_by_address(sd.address))
+                        for sd in server_descriptions
+                    ]
+                    break
+
+                # if we're requesting checks unset deprioritized_servers
+                deprioritized_servers = None
+
+                # No suitable servers.
+                if timeout == 0 or now > end_time:
+                    ss.failed(self._error_message(selector), self.description)
+                    raise ServerSelectionTimeoutError(
+                        f"{self._error_message(selector)}, Timeout: {timeout}s, Topology Description: {self.description!r}"
+                    )
+
+                if not logged_waiting:
+                    ss.waiting(int(1000 * (end_time - time.monotonic())))
+                    logged_waiting = True
+
+                self._ensure_opened()
+                self._request_check_all()
+                # Register a witer while under the write lock.
+                # We'll wait on this after releasing so we don't miss anything
+                topology_changed_ev = create_event()
+                self._registered_checks.append(topology_changed_ev)
+
+            # Release the write lock and wait for the topology description to
+            # change, or for a timeout. We won't miss any changes that
+            # came after our most recent apply_selector call, since we've
+            # held the lock until registering the witer.
+            try:
+                _event_wait(topology_changed_ev, common.MIN_HEARTBEAT_INTERVAL)
+            finally:
+                # if witer was cancelled or timed out remove them
+                with self._lock.write_lock():
+                    if topology_changed_ev in self._registered_checks:
+                        self._registered_checks.remove(topology_changed_ev)
+
+            # Try the fast path again after waking
+            with self._lock.read_lock():
+                now = time.monotonic()
+                server_descriptions = self._description.apply_selector(
+                    selector, address, custom_selector=self._settings.server_selector
+                )
+
+                if server_descriptions:
+                    self._description.check_compatible()
+                    servers = [
+                        cast(Server, self.get_server_by_address(sd.address))
+                        for sd in server_descriptions
+                    ]
+
+        return servers
 
     def _select_server(
         self,
@@ -464,7 +510,9 @@ class Topology:
                 self._monitor_tasks.append(self._srv_monitor)
 
         # Wake anything waiting in select_servers().
-        self._condition.notify_all()
+        while len(self._registered_checks) > 0:
+            witer = self._registered_checks.pop()
+            witer.set()
 
     def on_change(
         self,
@@ -474,7 +522,7 @@ class Topology:
     ) -> None:
         """Process a new ServerDescription after an hello call completes."""
         # We do no I/O holding the lock.
-        with self._lock:
+        with self._lock.write_lock():
             # Monitors may continue working on hello calls for some time
             # after a call to Topology.close, so this method may be called at
             # any time. Ensure the topology is open before processing the
@@ -506,7 +554,7 @@ class Topology:
     def on_srv_update(self, seedlist: list[tuple[str, Any]]) -> None:
         """Process a new list of nodes obtained from scanning SRV records."""
         # We do no I/O holding the lock.
-        with self._lock:
+        with self._lock.write_lock():
             if self._opened:
                 self._process_srv_update(seedlist)
 
@@ -526,7 +574,7 @@ class Topology:
     def get_primary(self) -> Optional[_Address]:
         """Return primary's address or None."""
         # Implemented here in Topology instead of MongoClient, so it can lock.
-        with self._lock:
+        with self._lock.read_lock():
             topology_type = self._description.topology_type
             if topology_type != TOPOLOGY_TYPE.ReplicaSetWithPrimary:
                 return None
@@ -536,7 +584,7 @@ class Topology:
     def _get_replica_set_members(self, selector: Callable[[Selection], Selection]) -> set[_Address]:
         """Return set of replica set member addresses."""
         # Implemented here in Topology instead of MongoClient, so it can lock.
-        with self._lock:
+        with self._lock.read_lock():
             topology_type = self._description.topology_type
             if topology_type not in (
                 TOPOLOGY_TYPE.ReplicaSetWithPrimary,
@@ -574,14 +622,24 @@ class Topology:
                 self._max_cluster_time = cluster_time
 
     def receive_cluster_time(self, cluster_time: Optional[Mapping[str, Any]]) -> None:
-        with self._lock:
+        with self._lock.write_lock():
             self._receive_cluster_time_no_lock(cluster_time)
 
     def request_check_all(self, wait_time: int = 5) -> None:
         """Wake all monitors, wait for at least one to check its server."""
-        with self._lock:
+        with self._lock.write_lock():
             self._request_check_all()
-            _cond_wait(self._condition, wait_time)
+            # Register an Event under lock, then release and wait
+            topology_changed_ev = create_event()
+            self._registered_checks.append(topology_changed_ev)
+
+        try:
+            _event_wait(topology_changed_ev, common.MIN_HEARTBEAT_INTERVAL)
+        finally:
+            # remove any cancelled or timed out witers
+            with self._lock.write_lock():
+                if topology_changed_ev in self._registered_checks:
+                    self._registered_checks.remove(topology_changed_ev)
 
     def data_bearing_servers(self) -> list[ServerDescription]:
         """Return a list of all data-bearing servers.
@@ -595,7 +653,7 @@ class Topology:
     def update_pool(self) -> None:
         # Remove any stale sockets and add new sockets if pool is too small.
         servers = []
-        with self._lock:
+        with self._lock.read_lock():
             # Only update pools for data-bearing servers.
             for sd in self.data_bearing_servers():
                 server = self._servers[sd.address]
@@ -614,7 +672,7 @@ class Topology:
         demand. Any further operations will raise
         :exc:`~.errors.InvalidOperation`.
         """
-        with self._lock:
+        with self._lock.write_lock():
             old_td = self._description
             for server in self._servers.values():
                 server.close()
@@ -805,7 +863,7 @@ class Topology:
         May reset the server to Unknown, clear the pool, and request an
         immediate check depending on the error and the context.
         """
-        with self._lock:
+        with self._lock.write_lock():
             self._handle_error(address, err_ctx)
 
     def _request_check_all(self) -> None:
